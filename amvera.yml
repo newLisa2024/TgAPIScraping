@@ -1,0 +1,19 @@
+meta:
+  # среда – Python, сборка через pip
+  environment: python
+  toolchain:
+    name: pip
+    # версия Python (можно 3.9, 3.10, 3.11 и т.д.)
+    version: 3.10
+
+# секция build необязательна, если requirements.txt лежит в корне
+build:
+  requirementsPath: requirements.txt
+
+run:
+  # команда для старта FastAPI-приложения
+  command: uvicorn api:app --host 0.0.0.0 --port 80
+  # порт внутри контейнера
+  containerPort: 80
+  # (опционально) если хотите, чтобы /data персистилось между рестартами:
+  # persistenceMount: /data

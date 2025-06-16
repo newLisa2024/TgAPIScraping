@@ -1,10 +1,11 @@
-# api.py
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import asyncio
-from main import scrape_history, serialize_message, handle_message, register_live_handler
 from telethon import TelegramClient
-from config import API_ID, API_HASH, SESSION_STRING, SESSION_NAME
+from telethon.sessions import StringSession
+
+from main import scrape_history, register_live_handler, serialize_message, handle_message
+from config import API_ID, API_HASH, SESSION_STRING
 
 class ScrapeRequest(BaseModel):
     channels: list[str]
@@ -13,27 +14,26 @@ class ScrapeRequest(BaseModel):
 
 app = FastAPI()
 
-# Инициализируем TelegramClient один раз
-session = SESSION_STRING or SESSION_NAME
-client = TelegramClient(session, API_ID, API_HASH)
+# Инициализируем клиент единожды
+client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
 @app.on_event("startup")
 async def startup():
-    await client.start()  # авторизация один раз
+    # Запускаем без input(), используя строку сессии
+    await client.start()
+    # Не стоит вызывать client.run_until_disconnected() здесь!
+    print("▶️ Telegram-клиент готов")
 
 @app.post("/scrape")
 async def scrape(req: ScrapeRequest):
     if not req.channels:
         raise HTTPException(400, "Пустой список channels")
-    # Запускаем историю
     if req.history:
         for ch in req.channels:
             await scrape_history(client, ch)
-    # Если включен listen — регистрируем хэндлер и не завершаем
     if req.listen:
         for ch in req.channels:
             register_live_handler(client, ch)
         return {"status": "listening", "channels": req.channels}
-    # Иначе отключаемся и возвращаем завершение
-    await client.disconnect()
     return {"status": "done", "channels": req.channels}
+
