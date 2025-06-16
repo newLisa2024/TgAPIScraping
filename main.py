@@ -1,117 +1,92 @@
-"""
-Telegram‑скрапер: посты → Airtable + ежедневная статистика подписчиков.
-
-Запуск:
-    python main.py
-"""
+# main.py
+import argparse
 import asyncio
-from datetime import datetime, date
-
+import json
+import os
 from telethon import TelegramClient, events, functions
-from pyairtable import Table
-from pyairtable.formulas import match
+from telethon.sessions import StringSession
 
-from config import (
-    API_ID, API_HASH, PHONE,
-    CHANNEL, FETCH_LIMIT,
-    AIRTABLE_API_KEY, AIRTABLE_BASE_ID,
-    AIRTABLE_TABLE_NAME, AIRTABLE_STATS_TABLE
-)
-from utils.logger import setup_logger
+from config import API_ID, API_HASH, SESSION_NAME, SESSION_STRING, FETCH_LIMIT
+from utils.logger import logger
+from utils.safety import safe_request
 
-logger = setup_logger()
 
-# ─────────────—— Airtable ————──────────────────────────────────────
-posts_table = Table(AIRTABLE_API_KEY, AIRTABLE_BASE_ID, AIRTABLE_TABLE_NAME)
-stats_table = Table(AIRTABLE_API_KEY, AIRTABLE_BASE_ID, AIRTABLE_STATS_TABLE) \
-    if AIRTABLE_STATS_TABLE else None
-
-# ─────────────—— Telethon ————──────────────────────────────────────
-client = TelegramClient("sessions/main_session", API_ID, API_HASH)
-
-# ════════════════ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ══════════════════════════
-def get_likes(message) -> int:
-    """Сумма лайков ❤️/👍; если реакций нет — 0."""
-    if not message.reactions:
-        return 0
-    return sum(
-        r.count
-        for r in message.reactions.results
-        if getattr(r.reaction, "emoticon", "") in ("❤️", "👍")
-    )
-
-async def get_subscriber_count() -> int:
-    """Количество подписчиков канала."""
-    full = await client(functions.channels.GetFullChannelRequest(CHANNEL))
-    return full.full_chat.participants_count
-
-async def upsert_post(message):
-    """Создать или обновить запись поста в Airtable."""
-    fields = {
-        "Telegram ID": str(message.id),
-        "Channel": CHANNEL,
-        "Date": message.date.strftime("%Y-%m-%d %H:%M:%S"),
-        "Text": (message.text or message.message or "")[:10000],
-        "Views": getattr(message, "views", 0),
-        "Likes": get_likes(message),
-        "Link": f"https://t.me/{CHANNEL}/{message.id}",
+def serialize_message(msg, channel) -> dict:
+    likes = 0
+    if msg.reactions:
+        likes = sum(
+            r.count for r in msg.reactions.results
+            if getattr(r.reaction, 'emoticon', '') in ('❤️','👍')
+        )
+    return {
+        'channel': channel,
+        'id':     msg.id,
+        'date':   msg.date.isoformat(),
+        'text':   msg.text or msg.message or '',
+        'views':  getattr(msg, 'views', 0),
+        'likes':  likes,
+        'link':   f"https://t.me/{channel.strip('@')}/{msg.id}"
     }
 
-    record = next(iter(
-        posts_table.all(formula=match({"Telegram ID": str(message.id)}), max_records=1)
-    ), None)
+async def handle_message(data: dict):
+    logger.info(f"[{data['channel']}] Пост {data['id']}")
+    print(json.dumps(data, ensure_ascii=False))
 
-    if record:
-        posts_table.update(record["id"], fields, typecast=True)
-        logger.info(f"🔄 Обновлён пост {message.id}")
+async def scrape_history(client: TelegramClient, channel: str):
+    logger.info(f"[{channel}] Загружаем последние {FETCH_LIMIT} сообщений")
+    async for msg in client.iter_messages(channel, limit=FETCH_LIMIT):
+        data = serialize_message(msg, channel)
+        await handle_message(data)
+    logger.info(f"[{channel}] История загружена")
+
+
+def register_live_handler(client: TelegramClient, channel: str):
+    @client.on(events.NewMessage(chats=channel))
+    async def on_new(event):
+        data = serialize_message(event.message, channel)
+        await handle_message(data)
+        logger.info(f"[{channel}] Новый пост {data['id']}")
+
+async def main(channels: list[str], history: bool, listen: bool):
+    # выбираем сессию: строку или файл
+    if SESSION_STRING:
+        session = StringSession(SESSION_STRING)
     else:
-        posts_table.create(fields, typecast=True)
-        logger.info(f"➕ Добавлен пост {message.id}")
+        session = SESSION_NAME
+    client = TelegramClient(session, API_ID, API_HASH)
+    # первый запуск может запросить код, при последующих запусках интерактива не будет
+    await client.start()
+    logger.info("Telegram-клиент подключён")
 
-async def scrape_history():
-    logger.info(f"📥 Загружаю последние {FETCH_LIMIT} сообщений @{CHANNEL}")
-    async for msg in client.iter_messages(CHANNEL, limit=FETCH_LIMIT):
-        await upsert_post(msg)
-    logger.info("✅ История загружена")
+    if history:
+        for ch in channels:
+            await scrape_history(client, ch)
 
-async def save_daily_stats():
-    """Записывает число подписчиков (одна запись в день)."""
-    if not stats_table:
-        return
-    today_iso = date.today().isoformat()
-    # если уже есть запись за сегодня — пропускаем
-    existing = stats_table.all(
-        formula=match({"Channel": CHANNEL, "Date": today_iso}), max_records=1
-    )
-    if existing:
-        return
-    subs = await get_subscriber_count()
-    stats_table.create(
-        {"Channel": CHANNEL, "Date": today_iso, "Subscribers": subs},
-        typecast=True
-    )
-    logger.info(f"👥 Подписчиков: {subs} (сохранено в статистику)")
+    if listen:
+        for ch in channels:
+            register_live_handler(client, ch)
+        logger.info("Входим в режим прослушивания новых сообщений")
+        await client.run_until_disconnected()
+    else:
+        await client.disconnect()
+        logger.info("Завершено")
 
-@client.on(events.NewMessage(chats=CHANNEL))
-async def new_message_handler(event):
-    await upsert_post(event.message)
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="Telegram Scraper")
+    parser.add_argument('--channels', nargs='+', required=True,
+                        help='Список каналов: @chan1 @chan2 или ID')
+    parser.add_argument('--history', action='store_true', help='Собрать историю')
+    parser.add_argument('--listen',  action='store_true', help='Слушать новые сообщения')
+    args = parser.parse_args()
 
-# ════════════════ Точка входа ══════════════════════════════════════
-async def main():
-    await client.start(phone=PHONE)
-    logger.info("▶️ Клиент подключён")
+    asyncio.run(main(
+        channels=args.channels,
+        history=args.history,
+        listen=args.listen
+    ))
 
-    await save_daily_stats()
-    await scrape_history()
 
-    logger.info("▶️ Переход в live‑stream")
-    await client.run_until_disconnected()
 
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("⏹ Остановлено пользователем")
 
 
 

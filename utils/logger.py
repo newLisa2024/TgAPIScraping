@@ -1,22 +1,19 @@
-import logging
+# utils/logger.py
 import os
+import logging
 from datetime import datetime
+from config import LOG_DIR
 
-def setup_logger() -> logging.Logger:
-    """
-    Создаёт файл logs/scrape_YYYY-MM-DD.log и возвращает настроенный logger.
-    """
-    os.makedirs("logs", exist_ok=True)
-    file = f"logs/scrape_{datetime.now():%Y-%m-%d}.log"
+os.makedirs(LOG_DIR, exist_ok=True)
+log_file = os.path.join(LOG_DIR, f"scraper_{datetime.now():%Y-%m-%d}.log")
 
-    logging.basicConfig(
-        filename=file,
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s"
-    )
-    console = logging.StreamHandler()
-    console.setLevel(logging.INFO)
-    console.setFormatter(logging.Formatter("%(levelname)s - %(message)s"))
-    logging.getLogger().addHandler(console)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    handlers=[
+        logging.FileHandler(log_file, encoding="utf-8"),
+        logging.StreamHandler()
+    ]
+)
 
-    return logging.getLogger()
+logger = logging.getLogger(__name__)

@@ -1,21 +1,31 @@
-"""
-Считывает .env и экспортирует константы.
-"""
+# config.py
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv()  # читает .env
 
-# Telegram
-API_ID = int(os.getenv("API_ID", "0"))
-API_HASH = os.getenv("API_HASH", "")
-PHONE = os.getenv("PHONE", "")
-CHANNEL = os.getenv("CHANNEL", "")
-FETCH_LIMIT = int(os.getenv("FETCH_LIMIT", "50"))
+def _get_env_int(key: str, default: int | None = None) -> int:
+    val = os.getenv(key)
+    if val is None:
+        if default is None:
+            raise RuntimeError(f"Не задана обязательная переменная {key}")
+        return default
+    try:
+        return int(val)
+    except ValueError:
+        raise RuntimeError(f"Переменная {key} должна быть числом, получили '{val}'")
 
-# Airtable
-AIRTABLE_API_KEY = os.getenv("AIRTABLE_API_KEY", "")
-AIRTABLE_BASE_ID = os.getenv("AIRTABLE_BASE_ID", "")
-AIRTABLE_TABLE_NAME = os.getenv("AIRTABLE_TABLE_NAME", "")
-AIRTABLE_STATS_TABLE = os.getenv("AIRTABLE_STATS_TABLE", "")  # для ежедневных подписчиков
 
+def _get_env_str(key: str, required: bool = False, default: str = "") -> str:
+    val = os.getenv(key, default)
+    if required and not val:
+        raise RuntimeError(f"Не задана обязательная переменная {key}")
+    return val
+
+# Основные настройки Telegram API
+API_ID        = _get_env_int("API_ID")
+API_HASH      = _get_env_str("API_HASH", required=True)
+SESSION_NAME  = _get_env_str("SESSION_NAME", default="main_session")
+SESSION_STRING = _get_env_str("SESSION_STRING")  # строка сессии Telethon (опционально)
+FETCH_LIMIT   = _get_env_int("FETCH_LIMIT", default=100)
+LOG_DIR       = _get_env_str("LOG_DIR", default="logs")
